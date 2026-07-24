@@ -1,8 +1,8 @@
-import { ENCRYPTION_KEY, ENCRYPTION_IV, OPENROUTER_API_KEY } from '$env/static/private';
-import { HfInference } from '@huggingface/inference';
+import { ENCRYPTION_IV, ENCRYPTION_KEY } from '$env/static/private';
 import type { ChatParamsType } from '$lib/chatParams';
-import { decrypt } from './utils';
+import { HfInference } from '@huggingface/inference';
 import { ChatOpenAI } from '@langchain/openai';
+import { decrypt } from './utils';
 
 export const createOpenAIProvider = (chatParams: ChatParamsType, enableStreaming = false) => {
     //https://v02.api.js.langchain.com/classes/langchain_openai.ChatOpenAI.html
@@ -36,7 +36,7 @@ export const createOnlineSearchProvider = (chatParams: ChatParamsType, enableStr
     return new ChatOpenAI({
         streaming: enableStreaming,
         model: "perplexity/sonar-pro",
-        apiKey: OPENROUTER_API_KEY,
+        apiKey: decrypt(ENCRYPTION_KEY, ENCRYPTION_IV, chatParams.model.apiKeyEncrypted),
         configuration: {
             baseURL: "https://openrouter.ai/api/v1",
         },
