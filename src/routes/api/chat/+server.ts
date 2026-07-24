@@ -8,6 +8,39 @@ import { checkIfMessageRequiresSearch, constructSystemPrompt, generatePromptTemp
 
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { z } from 'zod';
+
+// Hosts allowed to receive a DECRYPTED provider key.
+// The request body supplies both `apiKeyEncrypted` and `baseURL`, so without this
+// allowlist a caller could pair any ciphertext with a server they control and have
+// us decrypt the key straight to them. Default deny: unlisted hosts are rejected.
+const ALLOWED_HOSTS = new Set([
+    'api.openai.com',
+    'openrouter.ai',
+]);
+
+// Compare the PARSED hostname, never a substring. "https://api.openai.com.evil.com"
+// and "https://api.openai.com@evil.com" both contain an allowed host as a substring
+// but resolve to evil.com — only URL parsing reports where the request actually goes.
+const allowedBaseURL = z.string().url().refine(
+    (raw) => {
+        try {
+            const url = new URL(raw);
+            return url.protocol === 'https:' && ALLOWED_HOSTS.has(url.hostname);
+        } catch {
+            return false; // unparseable -> fail closed
+        }
+    },
+    { message: 'baseURL host is not allowed' }
+);
+
+// Validates only the security-critical field; everything else passes through
+// untouched so existing behaviour and types are unaffected.
+const ChatRequestSchema = z.object({
+    chatParams: z.object({
+        model: z.object({ baseURL: allowedBaseURL }).passthrough(),
+    }).passthrough(),
+}).passthrough();
 
 export const POST: RequestHandler = (async ({ request }): Promise<Response> => {
     console.log("\n\n\n\n\n")
@@ -16,6 +49,14 @@ export const POST: RequestHandler = (async ({ request }): Promise<Response> => {
         const response = await request.json() as { messages: ChatMessageType[], chatParams: ChatParamsType };
         logger.debug(`Incoming request data object keys: ${Object.keys(response).join(", ")}`);
         let { messages, chatParams } = response;
+
+        // Must run BEFORE any provider is built: the create*Provider() functions decrypt
+        // the API key, so validating afterwards would mean the plaintext already exists.
+        const parsed = ChatRequestSchema.safeParse(response);
+        if (!parsed.success) {
+            logger.warn(`Rejected request: ${parsed.error.issues[0]?.message} (baseURL: ${chatParams?.model?.baseURL})`);
+            return new Response("Invalid request", { status: 400 });
+        }
 
         messages = processMessages(messages, false);
         const promptSystem: string = constructSystemPrompt(messages);
